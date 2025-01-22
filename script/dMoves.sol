@@ -20,7 +20,7 @@ contract dMoves is Script {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
 
-        string[] memory names = new string[](9);
+        string[] memory names = new string[](10);
         address attackFactoryAddress = vm.envAddress("CUSTOM_EFFECT_ATTACK_FACTORY");
         CustomEffectAttackFactory attackFactory = CustomEffectAttackFactory(attackFactoryAddress);
 
@@ -145,7 +145,7 @@ contract dMoves is Script {
                 ACCURACY: 100,
                 PRIORITY: 3,
                 MOVE_TYPE: Type.Nature,
-                EFFECT: IEffect(address(0)),
+                EFFECT: IEffect(vm.envAddress("POISON_STATUS")),
                 EFFECT_ACCURACY: 0,
                 MOVE_CLASS: MoveClass.Physical,
                 NAME: stringToBytes32(names[7])
@@ -167,8 +167,26 @@ contract dMoves is Script {
                 NAME: stringToBytes32(names[8])
             })
         );
+        // Fire move that deals damage and can burn
+        names[9] = "Scorch";
+        CustomEffectAttack attack9 = attackFactory.createAttack(
+            CustomEffectAttackFactory.ATTACK_PARAMS({
+                BASE_POWER: 65,
+                STAMINA_COST: 3,
+                ACCURACY: 100,
+                PRIORITY: 3,
+                MOVE_TYPE: Type.Fire,
+                EFFECT: IEffect(vm.envAddress("BURN_STATUS")),
+                EFFECT_ACCURACY: 30,
+                MOVE_CLASS: MoveClass.Physical,
+                NAME: stringToBytes32(names[9])
+            })
+        );
 
-        NameAndAttack[] memory attackAndNames = new NameAndAttack[](9);
+
+
+
+        NameAndAttack[] memory attackAndNames = new NameAndAttack[](10);
 
         attackAndNames[0] = NameAndAttack({name: names[0], attack: attack0});
         attackAndNames[1] = NameAndAttack({name: names[1], attack: attack1});
@@ -179,6 +197,7 @@ contract dMoves is Script {
         attackAndNames[6] = NameAndAttack({name: names[6], attack: attack6});
         attackAndNames[7] = NameAndAttack({name: names[7], attack: attack7});
         attackAndNames[8] = NameAndAttack({name: names[8], attack: attack8});
+        attackAndNames[9] = NameAndAttack({name: names[9], attack: attack9});
 
         vm.stopBroadcast();
         return attackAndNames;

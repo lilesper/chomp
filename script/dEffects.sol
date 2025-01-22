@@ -10,16 +10,27 @@ import {FrightStatus} from "../src/effects/status/FrightStatus.sol";
 
 import {FrostbiteStatus} from "../src/effects/status/FrostbiteStatus.sol";
 import {SleepStatus} from "../src/effects/status/SleepStatus.sol";
+import {PoisonStatus} from "../src/effects/status/PoisonStatus.sol";
+import {BurnStatus} from "../src/effects/status/BurnStatus.sol";
 
 contract dEffects is Script {
     function run()
         external
-        returns (FrightStatus frightStatus, SleepStatus sleepStatus, FrostbiteStatus frostbiteStatus)
+        returns (
+            FrightStatus frightStatus,
+            SleepStatus sleepStatus,
+            FrostbiteStatus frostbiteStatus,
+            PoisonStatus poisonStatus,
+            BurnStatus burnStatus
+        )
     {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
-        frightStatus = new FrightStatus(Engine(vm.envAddress("ENGINE")));
-        sleepStatus = new SleepStatus(Engine(vm.envAddress("ENGINE")));
-        frostbiteStatus = new FrostbiteStatus(Engine(vm.envAddress("ENGINE")));
+        Engine engine = Engine(vm.envAddress("ENGINE"));
+        frightStatus = new FrightStatus(engine);
+        sleepStatus = new SleepStatus(engine);
+        frostbiteStatus = new FrostbiteStatus(engine);
+        poisonStatus = new PoisonStatus(engine);
+        burnStatus = new BurnStatus(engine);
     }
 }

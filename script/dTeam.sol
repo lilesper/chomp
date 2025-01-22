@@ -31,7 +31,7 @@ contract dTeam is Script {
         IAbility[] memory abilities = new IAbility[](1);
         abilities[0] = IAbility(address(0));
 
-        IMoveSet[] memory moves = new IMoveSet[](9);
+        IMoveSet[] memory moves = new IMoveSet[](10);
         moves[0] = IMoveSet(vm.envAddress("BLOW")); // Blow
         moves[1] = IMoveSet(vm.envAddress("PHILOSOPHIZE")); // Philosophize
         moves[2] = IMoveSet(vm.envAddress("SPOOK")); // Spook
@@ -41,6 +41,7 @@ contract dTeam is Script {
         moves[6] = IMoveSet(vm.envAddress("THROW_ROCK")); // Throw Rock
         moves[7] = IMoveSet(vm.envAddress("ALLERGIES")); // Allergies
         moves[8] = IMoveSet(vm.envAddress("INEFFABLE_BLAST")); // Ineffable Blast
+        moves[9] = IMoveSet(vm.envAddress("SCORCH")); // Scorch
 
         bytes32[] memory nameKey = new bytes32[](1);
         nameKey[0] = bytes32("name");
