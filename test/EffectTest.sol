@@ -23,8 +23,10 @@ import {TestTypeCalculator} from "./mocks/TestTypeCalculator.sol";
 
 // Import effects
 
+import {BurnStatus} from "../src/effects/status/BurnStatus.sol";
 import {FrightStatus} from "../src/effects/status/FrightStatus.sol";
 import {FrostbiteStatus} from "../src/effects/status/FrostbiteStatus.sol";
+import {PoisonStatus} from "../src/effects/status/PoisonStatus.sol";
 import {SleepStatus} from "../src/effects/status/SleepStatus.sol";
 
 // Import custom effect attack factory and template
@@ -41,9 +43,11 @@ contract EngineTest is Test {
     TestTeamRegistry defaultRegistry;
 
     CustomEffectAttackFactory customEffectAttackFactory;
+    BurnStatus burnStatus;
     FrostbiteStatus frostbiteStatus;
     SleepStatus sleepStatus;
     FrightStatus frightStatus;
+    PoisonStatus poisonStatus;
 
     address constant ALICE = address(1);
     address constant BOB = address(2);
@@ -77,9 +81,11 @@ contract EngineTest is Test {
         customEffectAttackFactory = new CustomEffectAttackFactory(template);
 
         // Deploy all effects
+        burnStatus = new BurnStatus(engine);
         frostbiteStatus = new FrostbiteStatus(engine);
         sleepStatus = new SleepStatus(engine);
         frightStatus = new FrightStatus(engine);
+        poisonStatus = new PoisonStatus(engine);
     }
 
     function _commitRevealExecuteForAliceAndBob(
@@ -319,7 +325,7 @@ contract EngineTest is Test {
         moves[0] = sleepAttack;
         Mon memory slowMon = Mon({
             stats: MonStats({
-                hp: 10,
+                hp: 16, // Makes poison damage = 2 (1/8 of max HP)
                 stamina: 2,
                 speed: 2,
                 attack: 1,
@@ -444,6 +450,236 @@ contract EngineTest is Test {
      *  - Wait for effect to end by itself
      *  - Check that Bob's mon has no more targeted effects
      */
+    function test_burn() public {
+        // Deploy an attack with burn
+        IMoveSet burnAttack = customEffectAttackFactory.createAttack(
+            CustomEffectAttackFactory.ATTACK_PARAMS({
+                BASE_POWER: 0,
+                STAMINA_COST: 0,
+                ACCURACY: 100,
+                PRIORITY: 1,
+                MOVE_TYPE: Type.Fire,
+                EFFECT: burnStatus,
+                EFFECT_ACCURACY: 100,
+                MOVE_CLASS: MoveClass.Physical,
+                NAME: bytes32("BurnHit")
+            })
+        );
+
+        IMoveSet[] memory moves = new IMoveSet[](1);
+        moves[0] = burnAttack;
+        Mon memory mon = Mon({
+            stats: MonStats({
+                hp: 16, // Makes burn damage = 1 (1/16 of max HP)
+                stamina: 2,
+                speed: 2,
+                attack: 10, // High attack to clearly see 50% reduction
+                defense: 1,
+                specialAttack: 1,
+                specialDefense: 1,
+                type1: Type.Fire,
+                type2: Type.None
+            }),
+            moves: moves,
+            ability: IAbility(address(0))
+        });
+        Mon[] memory team = new Mon[](1);
+        team[0] = mon;
+
+        // Register both teams
+        defaultRegistry.setTeam(ALICE, team);
+        defaultRegistry.setTeam(BOB, team);
+
+        StartBattleArgs memory args = StartBattleArgs({
+            p0: ALICE,
+            p1: BOB,
+            validator: oneMonOneMoveValidator,
+            rngOracle: mockOracle,
+            ruleset: IRuleset(address(0)),
+            teamRegistry: defaultRegistry,
+            p0TeamHash: keccak256(
+                abi.encodePacked(bytes32(""), uint256(0), defaultRegistry.getMonRegistryIndicesForTeam(ALICE, 0))
+            )
+        });
+        vm.prank(ALICE);
+        bytes32 battleKey = engine.proposeBattle(args);
+        bytes32 battleIntegrityHash = keccak256(
+            abi.encodePacked(
+                args.validator,
+                args.rngOracle,
+                args.ruleset,
+                args.teamRegistry,
+                keccak256(abi.encodePacked(bytes32(""), uint256(0)))
+            )
+        );
+        vm.prank(BOB);
+        engine.acceptBattle(battleKey, 0, battleIntegrityHash);
+        vm.prank(ALICE);
+        engine.startBattle(battleKey, "", 0);
+
+        // First move of the game has to be selecting their mons (both index 0)
+        _commitRevealExecuteForAliceAndBob(
+            battleKey, SWITCH_MOVE_INDEX, SWITCH_MOVE_INDEX, abi.encode(0), abi.encode(0)
+        );
+
+        // Alice and Bob both select attacks to apply burn
+        _commitRevealExecuteForAliceAndBob(battleKey, 0, 0, "", "");
+
+        // Check that both mons have an effect length of 1
+        BattleState memory state = engine.getBattleState(battleKey);
+        assertEq(state.monStates[0][0].targetedEffects.length, 1);
+        assertEq(state.monStates[1][0].targetedEffects.length, 1);
+
+        // Check that both mons took 1 damage (1/16 of max HP) from burn at end of turn
+        assertEq(state.monStates[0][0].hpDelta, -1);
+        assertEq(state.monStates[1][0].hpDelta, -1);
+
+        // Check that attack was reduced by 50%
+        assertEq(state.monStates[0][0].attackDelta, -5);
+        assertEq(state.monStates[1][0].attackDelta, -5);
+
+        // Do no-op moves for 4 more turns to verify burn duration
+        for (uint i = 0; i < 4; i++) {
+            _commitRevealExecuteForAliceAndBob(battleKey, NO_OP_MOVE_INDEX, NO_OP_MOVE_INDEX, "", "");
+            
+            state = engine.getBattleState(battleKey);
+            // Check burn damage accumulates (1 damage per turn)
+            // Each turn accumulates one more damage: -2, -3, -4, -5
+            int32 expectedDamage;
+            if (i == 0) expectedDamage = -2;
+            else if (i == 1) expectedDamage = -3;
+            else if (i == 2) expectedDamage = -4;
+            else expectedDamage = -5;
+            
+            assertEq(state.monStates[0][0].hpDelta, expectedDamage);
+            assertEq(state.monStates[1][0].hpDelta, expectedDamage);
+            
+            // Check effects still exist until last turn
+            if (i < 3) {
+                assertEq(state.monStates[0][0].targetedEffects.length, 1);
+                assertEq(state.monStates[1][0].targetedEffects.length, 1);
+                // Attack should still be reduced
+                assertEq(state.monStates[0][0].attackDelta, -5);
+                assertEq(state.monStates[1][0].attackDelta, -5);
+            } else {
+                // On last turn, effects should be gone and attack restored
+                assertEq(state.monStates[0][0].targetedEffects.length, 0);
+                assertEq(state.monStates[1][0].targetedEffects.length, 0);
+                assertEq(state.monStates[0][0].attackDelta, 0);
+                assertEq(state.monStates[1][0].attackDelta, 0);
+            }
+        }
+    }
+
+    function test_poison() public {
+        // Deploy an attack with poison
+        IMoveSet poisonAttack = customEffectAttackFactory.createAttack(
+            CustomEffectAttackFactory.ATTACK_PARAMS({
+                BASE_POWER: 0,
+                STAMINA_COST: 0,
+                ACCURACY: 100,
+                PRIORITY: 1,
+                MOVE_TYPE: Type.Nature,
+                EFFECT: poisonStatus,
+                EFFECT_ACCURACY: 100,
+                MOVE_CLASS: MoveClass.Physical,
+                NAME: bytes32("PoisonHit")
+            })
+        );
+
+        IMoveSet[] memory moves = new IMoveSet[](1);
+        moves[0] = poisonAttack;
+        Mon memory mon = Mon({
+            stats: MonStats({
+                hp: 24, // Makes poison damage = 3 (1/8 of max HP)
+                stamina: 2,
+                speed: 2,
+                attack: 1,
+                defense: 1,
+                specialAttack: 1,
+                specialDefense: 1,
+                type1: Type.Fire,
+                type2: Type.None
+            }),
+            moves: moves,
+            ability: IAbility(address(0))
+        });
+        Mon[] memory team = new Mon[](1);
+        team[0] = mon;
+
+        // Register both teams
+        defaultRegistry.setTeam(ALICE, team);
+        defaultRegistry.setTeam(BOB, team);
+
+        StartBattleArgs memory args = StartBattleArgs({
+            p0: ALICE,
+            p1: BOB,
+            validator: oneMonOneMoveValidator,
+            rngOracle: mockOracle,
+            ruleset: IRuleset(address(0)),
+            teamRegistry: defaultRegistry,
+            p0TeamHash: keccak256(
+                abi.encodePacked(bytes32(""), uint256(0), defaultRegistry.getMonRegistryIndicesForTeam(ALICE, 0))
+            )
+        });
+        vm.prank(ALICE);
+        bytes32 battleKey = engine.proposeBattle(args);
+        bytes32 battleIntegrityHash = keccak256(
+            abi.encodePacked(
+                args.validator,
+                args.rngOracle,
+                args.ruleset,
+                args.teamRegistry,
+                keccak256(abi.encodePacked(bytes32(""), uint256(0)))
+            )
+        );
+        vm.prank(BOB);
+        engine.acceptBattle(battleKey, 0, battleIntegrityHash);
+        vm.prank(ALICE);
+        engine.startBattle(battleKey, "", 0);
+
+        // First move of the game has to be selecting their mons (both index 0)
+        _commitRevealExecuteForAliceAndBob(
+            battleKey, SWITCH_MOVE_INDEX, SWITCH_MOVE_INDEX, abi.encode(0), abi.encode(0)
+        );
+
+        // Alice and Bob both select attacks to apply poison
+        _commitRevealExecuteForAliceAndBob(battleKey, 0, 0, "", "");
+
+        // Check that both mons have an effect length of 1
+        BattleState memory state = engine.getBattleState(battleKey);
+        assertEq(state.monStates[0][0].targetedEffects.length, 1);
+        assertEq(state.monStates[1][0].targetedEffects.length, 1);
+
+            // Check that both mons took 3 damage (1/8 of max HP) from poison at end of turn
+            assertEq(state.monStates[0][0].hpDelta, -3);
+            assertEq(state.monStates[1][0].hpDelta, -3);
+
+        // Do no-op moves for 4 more turns to verify poison duration
+        for (uint i = 0; i < 4; i++) {
+            _commitRevealExecuteForAliceAndBob(battleKey, NO_OP_MOVE_INDEX, NO_OP_MOVE_INDEX, "", "");
+            
+            state = engine.getBattleState(battleKey);
+            // Check poison damage accumulates (2 damage per turn)
+            if (i == 0) assertEq(state.monStates[0][0].hpDelta, -6);  // -3 * 2
+            if (i == 1) assertEq(state.monStates[0][0].hpDelta, -9);  // -3 * 3
+            if (i == 2) assertEq(state.monStates[0][0].hpDelta, -12); // -3 * 4
+            if (i == 3) assertEq(state.monStates[0][0].hpDelta, -15); // -3 * 5
+            
+            assertEq(state.monStates[1][0].hpDelta, state.monStates[0][0].hpDelta);
+            
+            // Check effects still exist until last turn
+            if (i < 3) {
+                assertEq(state.monStates[0][0].targetedEffects.length, 1);
+                assertEq(state.monStates[1][0].targetedEffects.length, 1);
+            } else {
+                // On last turn, effects should be gone
+                assertEq(state.monStates[0][0].targetedEffects.length, 0);
+                assertEq(state.monStates[1][0].targetedEffects.length, 0);
+            }
+        }
+    }
+
     function test_fright() public {
         // Deploy an attack with fright
         IMoveSet frightAttack = customEffectAttackFactory.createAttack(
